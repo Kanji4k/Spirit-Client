@@ -14,6 +14,128 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.2.1
+
+      - name: Arrange files
+        run: |
+          mkdir -p intermediary-src/client/confis/mixin src/main/resources tools
+          for f in $(find . -name '*.java' -not -path './intermediary-src/*' -not -path './src/*'); do
+            case "$f" in
+              *Mixin.java) mv "$f" intermediary-src/client/confis/mixin/ ;;
+              *) mv "$f" intermediary-src/client/confis/ ;;
+            esac
+          done
+          cat > src/main/resources/fabric.mod.json <<'EOF'
+          {
+            "schemaVersion": 1,
+            "id": "confis0oooooo",
+            "version": "1.0.0+1.21.11",
+            "name": "Confis0oooooo Client",
+            "description": "Lunar-style client menu with draggable HUD mods, messenger, item guide, hitboxes and more. Press Right Shift.",
+            "authors": ["Confis0oooooo"],
+            "license": "MIT",
+            "environment": "client",
+            "entrypoints": { "client": ["client.confis.ConfisClient"] },
+            "mixins": ["confis0oooooo.mixins.json"],
+            "depends": {
+              "fabricloader": ">=0.17.0",
+              "minecraft": ">=1.21.11",
+              "java": ">=21",
+              "fabric-api": "*"
+            }
+          }
+          EOF
+          cat > src/main/resources/confis0oooooo.mixins.json <<'EOF'
+          {
+            "required": false,
+            "package": "client.confis.mixin",
+            "compatibilityLevel": "JAVA_21",
+            "client": ["TpsMixin", "NameBadgeMixin", "ItemDropScaleMixin", "NametagMixin", "HitboxDispatcherMixin"],
+            "injectors": { "defaultRequire": 0 }
+          }
+          EOF
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  maven { url = 'https://maven.fabricmc.net/' }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          rootProject.name = 'confis0oooooo-client'
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2G
+          minecraft_version=1.21.11
+          yarn_mappings=1.21.11+build.4
+          loader_version=0.18.4
+          fabric_api_version=0.141.1+1.21.11
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'fabric-loom' version '1.14-SNAPSHOT'
+          }
+          version = '1.0.0+1.21.11'
+          base { archivesName = 'confis0oooooo-client' }
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+          }
+          tasks.withType(JavaCompile).configureEach {
+              options.release = 21
+              options.encoding = 'UTF-8'
+          }
+          java {
+              sourceCompatibility = JavaVersion.VERSION_21
+              targetCompatibility = JavaVersion.VERSION_21
+          }
+          EOF
+          cat > tools/yarnify.py <<'EOF'
+          import io, os, re, urllib.request, zipfile
+          YARN = "1.21.11+build.4"
+          URL = f"https://maven.fabricmc.net/net/fabricmc/yarn/{YARN}/yarn-{YARN}-v2.jar"
+          SRC, DST = "intermediary-src", "src/main/java"
+          data = urllib.request.urlopen(URL).read()
+          tiny = zipfile.ZipFile(io.BytesIO(data)).read("mappings/mappings.tiny").decode("utf-8").splitlines()
+          classes, members = {}, {}
+          for line in tiny[1:]:
+              p = line.split("\t")
+              if p[0] == "c" and len(p) >= 3 and p[2]:
+                  classes[p[1]] = p[2]
+              elif len(p) >= 5 and p[1] in ("m", "f") and p[4]:
+                  members[p[3]] = p[4]
+          print(len(classes), "classes,", len(members), "members mapped")
+          cls_pat = re.compile(r"net([./])minecraft\1(class_\d+(?:\$class_\d+)*)")
+          bare_pat = re.compile(r"\bclass_\d+(?:\$class_\d+)*\b")
+          mem_pat = re.compile(r"\b(?:method|field|comp)_\d+\b")
+          def full(i):
+              return classes.get("net/minecraft/" + i)
+          def sub_full(m):
+              sep, inter = m.group(1), m.group(2)
+              n = full(inter)
+              if not n:
+                  return m.group(0)
+              return n.replace("/", sep) if sep == "/" else n.replace("/", ".").replace("$", ".")
+          def sub_bare(m):
+              n = full(m.group(0))
+              if not n:
+                  return m.group(0)
+              return n.split("/")[-1].split("$")[-1]
+          def convert(t):
+              t = cls_pat.sub(sub_full, t)
+              t = bare_pat.sub(sub_bare, t)
+              return mem_pat.sub(lambda m: members.get(m.group(0), m.group(0)), t)
+          for root, _, files in os.walk(SRC):
+              for f in files:
+                  if f.endswith(".java"):
+                      sp = os.path.join(root, f)
+                      dp = os.path.join(DST, os.path.relpath(sp, SRC))
+                      os.makedirs(os.path.dirname(dp), exist_ok=True)
+                      open(dp, "w", encoding="utf-8").write(convert(open(sp, encoding="utf-8").read()))
+          print("done")
+          EOF
+
       - name: Convert source names (intermediary -> yarn)
         run: python3 tools/yarnify.py
       - name: Build
